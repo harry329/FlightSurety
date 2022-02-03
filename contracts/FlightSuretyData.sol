@@ -1,9 +1,11 @@
-pragma solidity ^0.4.25;
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.0;
 
-import "../node_modules/openzeppelin-solidity/contracts/math/SafeMath.sol";
+
+//import "../node_modules/openzeppelin-solidity/contracts/math/SafeMath.sol";
 
 contract FlightSuretyData {
-    using SafeMath for uint256;
+//    using SafeMath for uint256;
 
     /********************************************************************************************/
     /*                                       DATA VARIABLES                                     */
@@ -12,21 +14,45 @@ contract FlightSuretyData {
     address private contractOwner;                                      // Account used to deploy contract
     bool private operational = true;                                    // Blocks all state changes throughout the contract if false
 
+    struct Airline {
+        string name;
+        uint256 amountPaid;
+        bool authorityGranted;
+        bool isAdded;
+    }
+
+    mapping(address => Airline) private airlines;
+    uint8 constant private MINIMUM_AMOUNT = 3;
+    uint256 private numberOfAirlinesWithAuthority = 0;
+    uint256 private totalNumberOfAirlinesAdded = 0;
+
+    mapping(address => FlightInfo) customerInsuranceInfo;
+    struct FlightInfo {
+        string flightKey;
+        bool isPresent;
+    }
+
+    mapping(address => uint256) customerCreditInfo;
     /********************************************************************************************/
     /*                                       EVENT DEFINITIONS                                  */
     /********************************************************************************************/
 
 
+
+    event AirlineAdded(Airline airline);
+
     /**
     * @dev Constructor
     *      The deploying account becomes contractOwner
     */
-    constructor
-                                (
-                                ) 
-                                public 
-    {
+    constructor() public payable{
         contractOwner = msg.sender;
+        Airline memory firstAirline = Airline({name: "Owner's Airline", amountPaid: msg.value, isAdded: true, authorityGranted : false});
+        airlines[msg.sender] = firstAirline;
+        if(msg.value > MINIMUM_AMOUNT) {
+            airlines[msg.sender].authorityGranted = true;
+        }
+        incrementAirlineCount();
     }
 
     /********************************************************************************************/
@@ -56,9 +82,33 @@ contract FlightSuretyData {
         _;
     }
 
+    modifier checkOtherAirlinesApproval(address airlineOwnerAddress) {
+        require(!airlines[airlineOwnerAddress].isAdded, "Airlines is already added");
+        require(airlines[msg.sender].isAdded, "Airlines is already added");
+        bool checkAuthority = airlines[msg.sender].authorityGranted;
+        require(checkAuthority, "Adder has authority");
+        if(checkAuthority) {
+            incrementAuthorizedAirlineCount();
+        }
+        require(totalNumberOfAirlinesAdded < 4 ||   numberOfAirlinesWithAuthority > uint8(totalNumberOfAirlinesAdded/2), "Not Approved by other airlines"  );
+        _;
+    }
+
     /********************************************************************************************/
     /*                                       UTILITY FUNCTIONS                                  */
     /********************************************************************************************/
+
+    function incrementAirlineCount() private {
+        totalNumberOfAirlinesAdded +=1;
+    }
+
+    function incrementAuthorizedAirlineCount() private {
+        numberOfAirlinesWithAuthority +=1;
+    }
+
+    function resetAuthorizedAirlineCount() private {
+        numberOfAirlinesWithAuthority = 0;
+    }
 
     /**
     * @dev Get operating status of contract
@@ -99,11 +149,24 @@ contract FlightSuretyData {
     *
     */   
     function registerAirline
-                            (   
+                            (
+                            address airlineOwnerAddress,
+                            string memory nameOfAirline
                             )
                             external
-                            pure
+                            requireIsOperational
+                            checkOtherAirlinesApproval(airlineOwnerAddress)
+                            payable
     {
+        bool grantAccess = false;
+        if(msg.value > MINIMUM_AMOUNT) {
+            grantAccess = true;
+        }
+        Airline memory airline = Airline({name: nameOfAirline,amountPaid : msg.value,authorityGranted: grantAccess, isAdded : true  });
+        airlines[airlineOwnerAddress] = airline;
+        incrementAirlineCount();
+        resetAuthorizedAirlineCount();
+        emit AirlineAdded(airline);
     }
 
 
@@ -112,12 +175,15 @@ contract FlightSuretyData {
     *
     */   
     function buy
-                            (                             
+                            (
+                            address customer,
+                            string memory flightInfo
                             )
                             external
+                            requireIsOperational
                             payable
     {
-
+        customerInsuranceInfo[customer] = FlightInfo(flightInfo, true);
     }
 
     /**
@@ -125,12 +191,21 @@ contract FlightSuretyData {
     */
     function creditInsurees
                                 (
+                                address customer
                                 )
                                 external
-                                pure
+                                requireIsOperational
     {
+        if(address(this).balance >= 2 && customerInsuranceInfo[customer].isPresent ) {
+            customerCreditInfo[customer] = 2;
+        }
+
     }
-    
+
+//    function _make_payable(address x) internal pure returns (address payable) {
+//        address payable wallet = address(uint160(x));
+//        return  wallet;
+//    }
 
     /**
      *  @dev Transfers eligible payout funds to insuree
@@ -138,10 +213,16 @@ contract FlightSuretyData {
     */
     function pay
                             (
+                            address customer
                             )
                             external
-                            pure
+                            requireIsOperational
+                            payable
     {
+        if(customerCreditInfo[customer] >=2) {
+            customerCreditInfo[customer] -= 2;
+            payable(customer).transfer(2);
+        }
     }
 
    /**
@@ -174,13 +255,9 @@ contract FlightSuretyData {
     * @dev Fallback function for funding smart contract.
     *
     */
-    function() 
-                            external 
-                            payable 
-    {
-        fund();
-    }
+    fallback() external payable {}
 
+    receive() external payable {}
 
 }
 
